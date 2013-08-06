@@ -1,6 +1,6 @@
 define('views/comm',
-    ['l10n', 'z', 'urls', 'requests', 'nunjucks', 'notification', 'storage'],
-    function(l10n, z, urls, requests, nunjucks, notification, storage) {
+    ['l10n', 'z', 'urls', 'requests', 'nunjucks', 'notification', 'storage', 'cache'],
+    function(l10n, z, urls, requests, nunjucks, notification, storage, cache) {
     'use strict';
 
     var gettext = l10n.gettext;
@@ -83,7 +83,11 @@ define('views/comm',
                 break;
         }
 
-        requests.get(urls.api.url('notes', [threadId], params)).done(function(data) {
+        var url = urls.api.url('notes', [threadId], params);
+        if (filterMode !== 'read') {
+            cache.bust(url);
+        }
+        requests.get(url).done(function(data) {
             var markup = '';
             if (!data.meta.next) {
                 $threadItem.data('notes-page', -1);
@@ -133,6 +137,40 @@ define('views/comm',
             });
             $threadItem.find('.notes-container').append(markup);
             $threadItem.data('notes-page', pageNumber);
+        });
+
+    }).on('click', '.mark-note-read', function(e) {
+        var $this = $(this);
+        var $noteItem = $this.closest('.note-detail');
+        var noteId = $noteItem.data('note-id');
+        var threadId = $this.closest('.thread-item').data('thread-id');
+
+        requests.patch(urls.api.url('note', [threadId, noteId]), {is_read: true}).done(function(data) {
+            $this.remove();
+            $noteItem.remove();
+        });
+
+        var readNote;
+        var cachedUrl = urls.api.url('notes', [threadId], {ordering: '-created', limit: 5, show_read: '0'});
+        var cachedObjects = cache.get(cachedUrl).objects;
+        for (var i = 0; i < cachedObjects.length; i++) {
+            if (cachedObjects[i].id === noteId) {
+                readNote = cachedObjects[i];
+            }
+        }
+
+        cache.attemptRewrite(function(key) {
+            return key === urls.api.url('notes', [threadId], {ordering: '-created', limit: 5, show_read: '1'});
+        }, function(data) {
+            for (var i = 0; i < data.objects.length; i++) {
+                // Insert the read note at the appropriate position in the list.
+                if (data.objects[i].created <= readNote.created) {
+                    console.log(readNote);
+                    data.objects.splice(i, 0, readNote);
+                    break;
+                }
+            }
+            return data;
         });
     });
 
